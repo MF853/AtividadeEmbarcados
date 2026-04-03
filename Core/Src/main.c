@@ -41,6 +41,7 @@
 
 /* Private variables ---------------------------------------------------------*/
 UART_HandleTypeDef huart2;
+int led_freq = 1; //1Hz ou 2Hz
 
 /* USER CODE BEGIN PV */
 
@@ -50,16 +51,18 @@ UART_HandleTypeDef huart2;
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
-void software_pwm(uint16_t, uint8_t);
+//void software_pwm(uint16_t, uint8_t);
+void led_blink(uint16_t);
+
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-void software_pwm(uint16_t frequency, uint8_t duty_cycle)
+/*void software_pwm(uint16_t frequency, uint8_t duty_cycle)
 {
-	// Calcula perpiodo em ms
+	// Calcula periodo em ms
 	uint32_t period_ms = 1000 / frequency;
 	// Calculas os tempos ON e OFF com base nos Duty Cycles
 	uint32_t on_time = (period_ms * duty_cycle) / 100;
@@ -70,7 +73,19 @@ void software_pwm(uint16_t frequency, uint8_t duty_cycle)
 	// Desliga GPIO durante tempo OFF - AJUSTE O GPIO da Placa L476RG
 	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
 	HAL_Delay(off_time);
+}*/
+void led_blink(uint16_t led_freq)
+{
+	// Calcula periodo em ms
+	uint32_t period_ms = 1000 / led_freq;
+	uint32_t on_time = period_ms/10;
+	uint32_t off_time = period_ms - on_time;
+	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
+	HAL_Delay(on_time);
+	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
+	HAL_Delay(off_time);
 }
+
 /* USER CODE END 0 */
 
 /**
@@ -101,8 +116,8 @@ int main(void)
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
-  MX_GPIO_Init();
   MX_USART2_UART_Init();
+  MX_GPIO_Init();
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */
@@ -112,8 +127,7 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
-	  // Gera PWM com frequênci e Duty Cycle definidos
-	  software_pwm(200, 50);
+	  led_blink(led_freq);
     /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
@@ -237,13 +251,25 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
 
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
+
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
-
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+	if (GPIO_Pin == GPIO_PIN_13) {
+		led_freq = (led_freq%2)+1;
+	}
+	else {
+		__NOP();
+	}
+}
 /* USER CODE END 4 */
 
 /**
