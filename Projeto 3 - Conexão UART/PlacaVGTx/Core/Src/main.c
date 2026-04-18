@@ -18,6 +18,8 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include <string.h>
+#include <stdio.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -45,7 +47,23 @@ DMA_HandleTypeDef hdma_usart1_rx;
 DMA_HandleTypeDef hdma_usart1_tx;
 
 /* USER CODE BEGIN PV */
+uint8_t contador = 0;
+uint8_t cmd_recebido = 0;
 
+// Tabela com os membros da equipe
+typedef struct {
+    char nome[20];
+    char matricula[12];
+} Membro;
+
+// Definição da tabela como uma array de structs
+Membro equipe[] = {
+    {"Joao Silva", "001"},
+    {"Maria Souza", "002"},
+    {"Vinicius Moura", "003"}
+};
+
+char tx_buffer[256]; // Buffer para linearizar a tabela para o DMA
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -94,7 +112,7 @@ int main(void)
   MX_DMA_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
-
+  HAL_UART_Receive_IT(&huart1, &cmd_recebido, 1);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -221,7 +239,33 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+    // O botão da Discovery geralmente está no pino 0
+    if (GPIO_Pin == GPIO_PIN_0) {
+        contador++;
+    }
+}
 
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+    if (huart->Instance == USART1 && cmd_recebido == 0x5A) {
+        // 1. Envia contador
+        HAL_UART_Transmit_IT(&huart1, &contador, 1);
+
+        // 2. Monta a "tabela de verdade" no buffer de texto
+        memset(tx_buffer, 0, sizeof(tx_buffer));
+        for(int i = 0; i < 3; i++) {
+            char linha[50];
+            sprintf(linha, "Nome: %s | Mat: %s\r\n", equipe[i].nome, equipe[i].matricula);
+            strcat(tx_buffer, linha);
+        }
+
+        // 3. Envia a tabela formatada via DMA
+        HAL_UART_Transmit_DMA(&huart1, (uint8_t*)tx_buffer, strlen(tx_buffer));
+
+        contador = 0;
+        HAL_UART_Receive_IT(&huart1, &cmd_recebido, 1);
+    }
+}
 /* USER CODE END 4 */
 
 /**

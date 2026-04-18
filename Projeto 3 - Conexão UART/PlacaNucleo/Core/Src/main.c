@@ -18,6 +18,8 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include <string.h>
+#include <stdio.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -48,7 +50,19 @@ DMA_HandleTypeDef hdma_usart2_rx;
 DMA_HandleTypeDef hdma_usart2_tx;
 
 /* USER CODE BEGIN PV */
+typedef enum {
+    IDLE,
+    WAITING_SERVER,
+    BLINKING_LED,
+    SENDING_PC
+} State_t;
 
+State_t currentState = IDLE;
+uint8_t cmd_request = 0x5A;       // Comando para o servidor
+uint8_t server_counter = 0;       // Valor X recebido do servidor
+char team_table[512];             // Buffer para a tabela via DMA
+char pc_msg[50];                  // Mensagem formatada para o PC
+uint8_t data_ready = 0;           // Flag de controle
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -106,6 +120,41 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+	  switch (currentState) {
+	          case WAITING_SERVER:
+	              if (data_ready) {
+	                  data_ready = 0;
+	                  currentState = BLINKING_LED;
+	              }
+	              break;
+
+	          case BLINKING_LED:
+	              // Pisca o LED na frequência de 1Hz (500ms ON / 500ms OFF)
+	              // Repete server_counter vezes
+	              for (int i = 0; i < server_counter; i++) {
+	                  HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_SET);
+	                  HAL_Delay(500);
+	                  HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+	                  HAL_Delay(500);
+	              }
+	              currentState = SENDING_PC;
+	              break;
+
+	          case SENDING_PC:
+	              // Título da tabela para o PC
+	              char header[] = "\r\n--- TABELA DE EQUIPE ---\r\n";
+	              HAL_UART_Transmit_IT(&huart2, (uint8_t*)header, strlen(header));
+	              HAL_Delay(50); // Tempo para o IT concluir
+
+	              // Envia os dados recebidos do servidor via DMA
+	              HAL_UART_Transmit_DMA(&huart2, (uint8_t*)team_table, strlen(team_table));
+
+	              currentState = IDLE;
+	              break;
+
+	          default:
+	              break;
+	      }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -301,7 +350,24 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+    if (GPIO_Pin == B1_Pin && currentState == IDLE) {
+        // Envia 0x5A por interrupção para o servidor
+        HAL_UART_Transmit_IT(&huart1, &cmd_request, 1);
 
+        // Prepara para receber o contador e a tabela
+        HAL_UART_Receive_IT(&huart1, &server_counter, 1);
+        HAL_UART_Receive_DMA(&huart1, (uint8_t*)team_table, sizeof(team_table));
+
+        currentState = WAITING_SERVER;
+    }
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+    if (huart->Instance == USART1) {
+        data_ready = 1; // Servidor respondeu
+    }
+}
 /* USER CODE END 4 */
 
 /**
