@@ -1,0 +1,10 @@
+23:24:24 **** Incremental Build of configuration Debug for project PlacaNucleo ****
+make -j12 all 
+arm-none-eabi-size  PlacaNucleo.elf 
+   text	   data	    bss	    dec	    hex	filename
+  23660	     96	   3088	  26844	   68dc	PlacaNucleo.elf
+Finished building: default.size.stdout
+ 
+
+23:24:24 Build Finished. 0 errors, 0 warnings. (took 254ms)
+

@@ -18,6 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include <string.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -49,7 +50,9 @@ DMA_HandleTypeDef hdma_usart1_rx;
 DMA_HandleTypeDef hdma_usart1_tx;
 
 /* USER CODE BEGIN PV */
-
+uint8_t contadorLed = 0;
+char tabelaEquipe[120] ="1.Guilherme Santos, 202201\r\n""2.José Mário, 202202\r\n""3.Vinícius Moura, 202203\r\n";
+uint8_t comando_rx = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -102,7 +105,7 @@ int main(void)
   MX_SPI1_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
-
+  HAL_UART_Receive_IT(&huart1, &comando_rx, 1);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -339,7 +342,7 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_EVT_RISING;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
@@ -386,13 +389,44 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(MEMS_INT2_GPIO_Port, &GPIO_InitStruct);
 
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI0_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI0_IRQn);
+
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
+//Incrementa a variável contador
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+    if (GPIO_Pin == B1_Pin) {
+        contadorLed++;
+    }
+}
 
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+    // Verifica se a interrupção veio da USART1
+    if (huart->Instance == USART1) {
+
+        // Verifica se o byte recebido é o comando esperado (0x5A)
+        if (comando_rx == 0x5A) {
+
+            // Envia valor atual do contador por Interrupção
+            HAL_UART_Transmit_IT(&huart1, &contadorLed, 1);
+
+            // Envia tabela de membros da equipe ao cliente por DMA
+            HAL_UART_Transmit_DMA(&huart1, (uint8_t*)tabelaEquipe, strlen(tabelaEquipe));
+
+            // Zera contador
+            contadorLed = 0;
+        }
+
+        // Reativa a interrupção para continuar ouvindo o próximo comando
+        HAL_UART_Receive_IT(&huart1, &comando_rx, 1);
+    }
+}
 /* USER CODE END 4 */
 
 /**
