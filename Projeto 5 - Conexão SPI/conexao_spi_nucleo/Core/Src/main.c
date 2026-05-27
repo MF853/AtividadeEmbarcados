@@ -34,6 +34,8 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define PCF8591_ADDRESS 0x48 << 1
+#define CS_LOW()  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_2, GPIO_PIN_RESET)
+#define CS_HIGH() HAL_GPIO_WritePin(GPIOC, GPIO_PIN_2, GPIO_PIN_SET)
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -49,6 +51,8 @@ SPI_HandleTypeDef hspi2;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
+
+// I²C
 uint8_t rx_i2c_buffer[2];
 uint8_t dac_tx_buffer[2];
 
@@ -63,6 +67,9 @@ typedef enum {
 	READ_AIN1,
 	READ_AIN3,
 	SET_DAC,
+	TEMP,
+	VOLT,
+	LDR,
 	Null
 } Command_t;
 Command_t comando = Null;
@@ -71,12 +78,89 @@ uint8_t ain0;
 uint8_t ain1;
 uint8_t ain3;
 uint8_t dac_value;
+uint8_t sensor_value;
 
 uint8_t rx_char;
 volatile uint8_t uart_index = 0;
 char rx_uart_buffer[64];
 
 char pc_msg[100];
+
+// SPI
+volatile uint8_t spi_busy = 0;
+uint8_t spi_tx_buffer[2];
+
+volatile uint32_t tick_display = 0;
+volatile uint8_t display_toggle = 0;
+
+typedef enum {
+    DISPLAY_NONE,
+    DISPLAY_TEMP_POS,
+    DISPLAY_TEMP_NEG,
+    DISPLAY_VOLT_POS,
+    DISPLAY_VOLT_NEG,
+    DISPLAY_LDR_POS,
+    DISPLAY_LDR_NEG
+} DisplayMode_t;
+
+DisplayMode_t displayMode = DISPLAY_NONE;
+
+const uint8_t CHAR_T[8] = {
+    0b11111110,
+    0b00010000,
+    0b00010000,
+    0b00010000,
+    0b00010000,
+    0b00010000,
+    0b00010000,
+    0b00000000
+};
+
+const uint8_t CHAR_V[8] = {
+    0b10000010,
+    0b10000010,
+    0b10000010,
+    0b01000100,
+    0b01000100,
+    0b00101000,
+    0b00010000,
+    0b00000000
+};
+
+const uint8_t CHAR_L[8] = {
+    0b10000000,
+    0b10000000,
+    0b10000000,
+    0b10000000,
+    0b10000000,
+    0b10000000,
+    0b11111110,
+    0b00000000
+};
+
+const uint8_t CHAR_PLUS[8] = {
+    0b00000000,
+    0b00010000,
+    0b00010000,
+    0b11111110,
+    0b00010000,
+    0b00010000,
+    0b00000000,
+    0b00000000
+};
+
+const uint8_t CHAR_MINUS[8] = {
+    0b00000000,
+    0b00000000,
+    0b00000000,
+    0b11111110,
+    0b00000000,
+    0b00000000,
+    0b00000000,
+    0b00000000
+};
+
+uint8_t matriz[8];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -87,7 +171,8 @@ static void MX_USART2_UART_Init(void);
 static void MX_SPI2_Init(void);
 /* USER CODE BEGIN PFP */
 void PCF8591_StartRead(uint8_t channel);
-
+void MAX7219_DisplayChar(const uint8_t *bitmap);
+void Display_Update(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -103,6 +188,84 @@ void PCF8591_SetDAC(uint8_t value) {
     dac_tx_buffer[1] = value;
 
     HAL_I2C_Master_Transmit_IT(&hi2c1, PCF8591_ADDRESS, dac_tx_buffer, 2);
+}
+
+void MAX7219_Send(uint8_t address, uint8_t data) {
+    if(spi_busy) {
+    	return;
+    }
+
+    spi_busy = 1;
+    spi_tx_buffer[0] = address;
+    spi_tx_buffer[1] = data;
+    CS_LOW();
+    HAL_SPI_Transmit_IT(&hspi2, spi_tx_buffer, 2);
+}
+
+void MAX7219_Init(void) {
+    MAX7219_Send(0x09, 0x00);
+    MAX7219_Send(0x0A, 0x03);
+    MAX7219_Send(0x0B, 0x07);
+    MAX7219_Send(0x0C, 0x01);
+    MAX7219_Send(0x0F, 0x00);
+}
+
+void MAX7219_Clear(void) {
+    for(uint8_t i = 1; i <= 8; i++) {
+        MAX7219_Send(i, 0x00);
+    }
+}
+
+void MAX7219_DisplayChar(const uint8_t *bitmap) {
+    for(uint8_t i = 0; i < 8; i++) {
+        while(spi_busy);
+        matriz[i] = bitmap[i];
+        MAX7219_Send(i + 1, matriz[i]);
+    }
+}
+
+void Display_Update(void) {
+    if(displayMode == DISPLAY_NONE) {
+    	return;
+    }
+
+    uint32_t now = HAL_GetTick();
+    if(now - tick_display >= 500) {
+        tick_display = now;
+        display_toggle = !display_toggle;
+
+        if(display_toggle) {
+            switch(displayMode) {
+                case DISPLAY_TEMP_POS:
+                case DISPLAY_TEMP_NEG:
+                    MAX7219_DisplayChar(CHAR_T);
+                    break;
+                case DISPLAY_VOLT_POS:
+                case DISPLAY_VOLT_NEG:
+                    MAX7219_DisplayChar(CHAR_V);
+                    break;
+                case DISPLAY_LDR_POS:
+                case DISPLAY_LDR_NEG:
+                    MAX7219_DisplayChar(CHAR_L);
+                    break;
+                default: break;
+            }
+        } else {
+            switch(displayMode) {
+                case DISPLAY_TEMP_POS:
+                case DISPLAY_VOLT_POS:
+                case DISPLAY_LDR_POS:
+                    MAX7219_DisplayChar(CHAR_PLUS);
+                    break;
+                case DISPLAY_TEMP_NEG:
+                case DISPLAY_VOLT_NEG:
+                case DISPLAY_LDR_NEG:
+                    MAX7219_DisplayChar(CHAR_MINUS);
+                    break;
+                default: break;
+            }
+        }
+    }
 }
 /* USER CODE END 0 */
 
@@ -139,7 +302,9 @@ int main(void)
   MX_USART2_UART_Init();
   MX_SPI2_Init();
   /* USER CODE BEGIN 2 */
-
+  MAX7219_Init();
+  MAX7219_Clear();
+  HAL_UART_Receive_IT(&huart2, &rx_char, 1);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -181,6 +346,21 @@ int main(void)
 
 	  	              HAL_UART_Transmit_IT(&huart2, (uint8_t*)pc_msg, strlen(pc_msg));
 	  	          }
+	  	          if(strcmp(rx_uart_buffer, "Temp") == 0) {
+	  	        	  comando = TEMP;
+	  	        	  comando_valido = 1;
+	  	        	  PCF8591_StartRead(1); // AIN0 = temperatura
+	  	          }
+	  	          if(strcmp(rx_uart_buffer, "Volt") == 0) {
+	  	        	  comando = VOLT;
+	  	        	  comando_valido = 1;
+	  	        	  PCF8591_StartRead(3); // AIN1 = potenciômetro
+	  	          }
+	  	          if(strcmp(rx_uart_buffer, "LDR") == 0) {
+	  	        	  comando = LDR;
+	  	        	  comando_valido = 1;
+	  	        	  PCF8591_StartRead(0); // AIN3 = LDR
+	  	          }
 	  	          if (!comando_valido){
 	  		          sprintf(pc_msg, "Comando invalido\r\n");
 
@@ -211,12 +391,56 @@ int main(void)
 	  	                  sprintf(pc_msg, "AIN3 = %d\r\n", ain3);
 	  	                  break;
 
+	  	              case TEMP:
+	  	            	  sensor_value = rx_i2c_buffer[1];
+	  	            	  sprintf(pc_msg, "Temp = %d\r\n", sensor_value);
+	  	            	  if (sensor_value < 128) {
+	  	            		  displayMode = DISPLAY_TEMP_NEG;
+		  	            	  tick_display = 0;
+		  	            	  display_toggle = 0;
+	  	            		  break;
+	  	            	  }
+  	            		  displayMode = DISPLAY_TEMP_POS;
+	  	            	  tick_display = 0;
+	  	            	  display_toggle = 0;
+	  	            	  break;
+
+	  	              case VOLT:
+	  	            	  sensor_value = rx_i2c_buffer[1];
+	  	            	  sprintf(pc_msg, "Volt = %d\r\n", sensor_value);
+	  	            	  if (sensor_value < 128) {
+	  	            		  displayMode = DISPLAY_VOLT_NEG;
+		  	            	  tick_display = 0;
+		  	            	  display_toggle = 0;
+	  	            		  break;
+	  	            	  }
+	  	            	  displayMode = DISPLAY_VOLT_POS;
+	  	            	  tick_display = 0;
+	  	            	  display_toggle = 0;
+	  	            	  break;
+
+	  	              case LDR:
+	  	            	  sensor_value = rx_i2c_buffer[1];
+	  	            	  sprintf(pc_msg, "LDR = %d\r\n", sensor_value);
+	  	            	  if (sensor_value < 128) {
+	  	            		  displayMode = DISPLAY_LDR_NEG;
+		  	            	  tick_display = 0;
+		  	            	  display_toggle = 0;
+	  	            		  break;
+	  	            	  }
+	  	            	  displayMode = DISPLAY_LDR_POS;
+	  	            	  tick_display = 0;
+	  	            	  display_toggle = 0;
+	  	            	  break;
+
 	  	              default:
 	  	                  break;
 	  	          }
 
 	  	          HAL_UART_Transmit_IT(&huart2, (uint8_t*)pc_msg, strlen(pc_msg));
 	  	      }
+  	          Display_Update();
+
   }
   /* USER CODE END 3 */
 }
@@ -341,7 +565,7 @@ static void MX_SPI2_Init(void)
   hspi2.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi2.Init.CLKPhase = SPI_PHASE_1EDGE;
   hspi2.Init.NSS = SPI_NSS_SOFT;
-  hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
+  hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
   hspi2.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi2.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi2.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
@@ -412,6 +636,9 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_2, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : B1_Pin */
@@ -419,6 +646,13 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PC2 */
+  GPIO_InitStruct.Pin = GPIO_PIN_2;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /*Configure GPIO pin : LD2_Pin */
   GPIO_InitStruct.Pin = LD2_Pin;
@@ -458,7 +692,8 @@ void HAL_I2C_MasterRxCpltCallback(I2C_HandleTypeDef *hi2c) {
 
 void HAL_I2C_MasterTxCpltCallback(I2C_HandleTypeDef *hi2c) {
 	if (hi2c->Instance == I2C1) {
-		        if (comando == READ_AIN0 || comando == READ_AIN1 || comando == READ_AIN3) {
+		        if (comando == READ_AIN0 || comando == READ_AIN1 || comando == READ_AIN3
+		        	|| comando == TEMP || comando == VOLT || comando == LDR) {
 		            HAL_I2C_Master_Receive_IT(&hi2c1, PCF8591_ADDRESS, rx_i2c_buffer, 2);
 		        }
 		        else {
@@ -483,6 +718,14 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
         }
 
         HAL_UART_Receive_IT(&huart2, &rx_char, 1);
+    }
+}
+
+void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi) {
+    if(hspi->Instance == SPI2) {
+        CS_HIGH();
+
+        spi_busy = 0;
     }
 }
 /* USER CODE END 4 */
